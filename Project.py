@@ -31,6 +31,7 @@ import math
 import scipy.stats
 import numpy as np
 from itertools import combinations
+from statsmodels.stats.multitest import multipletests
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -71,49 +72,6 @@ def compute_P_X_given_Y(X, Y):
 
     return P_X_given_Y
 
-def compute_P_X_given_YZ(X, Y, Z):
-    """Compute P(X|Y,Z) for all elements in X, Y, Z assuming bivariate normal distribution"""
-    P_X_given_YZ = []
-    n = len(X)
-    
-    X = X.values.flatten().tolist()
-    Y = Y.values.flatten().tolist()
-    Z = Z.values.flatten().tolist()
-
-    # Calculate means and standard deviations
-    myu_x = np.mean(X)
-    myu_y = np.mean(Y)
-    myu_z = np.mean(Z)
-    
-    sigma_x = np.std(X)
-    sigma_y = np.std(Y)
-    sigma_z = np.std(Z)
-    
-    # Calculate correlation coefficients
-    corr_xy = scipy.stats.pearsonr(X, Y)[0]
-    corr_xz = scipy.stats.pearsonr(X, Z)[0]
-    corr_yz = scipy.stats.pearsonr(Y, Z)[0]
-    
-    if np.isnan(corr_xy):
-        corr_xy = 0.0
-    if np.isnan(corr_xz):
-        corr_xz = 0.0
-    if np.isnan(corr_yz):
-        corr_yz = 0.0
-    
-    for i in range(n):
-        Xi = X[i]
-        Yi = Y[i]
-        Zi = Z[i]
-        
-        # Compute P(Xi|Yi,Zi) using the formula for conditional probability in multivariate normal distribution
-        P_Xi_given_YiZi = (1/(math.sqrt(2*math.pi*(sigma_x**2)*(1-corr_xy**2-corr_xz**2+2*corr_xy*corr_xz)))) * \
-                          math.exp((-(Xi - myu_x - corr_xy*(sigma_x/sigma_y)*(Yi-myu_y) - corr_xz*(sigma_x/sigma_z)*(Zi-myu_z))**2) / \
-                                   (2*(sigma_x**2)*(1-corr_xy**2-corr_xz**2+2*corr_xy*corr_xz)))
-        
-        P_X_given_YZ.append(max(P_Xi_given_YiZi, 1e-10))  # Avoid zero probabilities
-    
-    return P_X_given_YZ
 
 def m1_likelihood(L, C, R):
     """
@@ -152,17 +110,17 @@ def m2_likelihood(L, C, R):
 def m3_likelihood(L, C, R):
     """
     Calculate likelihood for M3: L ---> C, L ---> R
-    P(L, C, R) = P(L) * P(C|L) * P(R|C,L)
+    P(L, C, R) = P(L) * P(C|L) * P(R|L)
     """
     P_C_given_L = compute_P_X_given_Y(C, L)
-    P_R_given_CL = compute_P_X_given_YZ(R, C, L)
+    P_R_given_L = compute_P_X_given_Y(R, L)
 
     log_likelihood = 0
     n = len(L)
     L = L.values.flatten()  # Ensure L is a flat array
     for i in range(n):
-        log_likelihood += np.log(max(abs(L[i]), 1e-10)) + np.log(P_C_given_L[i]) + np.log(P_R_given_CL[i])
-    
+        log_likelihood += np.log(max(abs(L[i]), 1e-10)) + np.log(P_C_given_L[i]) + np.log(P_R_given_L[i])
+
     return log_likelihood
 
 def get_data_for_triplet(snp, gene, phenotype):
@@ -248,46 +206,70 @@ def test_causality(qtl_snp, gene, phenotype):
         'Best_LogLikelihood': likelihoods[best_model]
     }
 
-def permutation_test(L, R, C, n_permutations=1000):
+def permutation_test(L, R, C, test_model, n_permutations=1000):
     """
     Perform permutation test to assess statistical significance of causality models
+
+    test_model: str, one of 'M1', 'M2', 'M3'
+    
+    H0: test_model is not closer to true model than the others
+    H1: test_model is closer to true model than the others
     """
-    # Calculate original likelihoods
-    orig_ll_m1 = m1_likelihood(L, C, R)
-    orig_ll_m2 = m2_likelihood(L, C, R)
-    orig_ll_m3 = m3_likelihood(L, C, R)
+
+    if not test_model in ['M1', 'M2', 'M3']:
+        raise ValueError("test_model must be one of 'M1', 'M2', 'M3'")
+
+    # Calculate observed likelihoods
+    obs_ll_m1 = m1_likelihood(L, C, R)
+    obs_ll_m2 = m2_likelihood(L, C, R)
+    obs_ll_m3 = m3_likelihood(L, C, R)
     
-    # Store permuted results
-    perm_ll_m1 = []
-    perm_ll_m2 = []
-    perm_ll_m3 = []
+
+    lratios_perm = []
     
+    if test_model == 'M1':
+        # M1: L -> R -> C
+        lratio_obs = obs_ll_m1 - max(obs_ll_m2, obs_ll_m3)
+    elif test_model == 'M2':
+        # M2: L -> C -> R
+        lratio_obs = obs_ll_m2 - max(obs_ll_m1, obs_ll_m3)
+    else:
+        # M3: L -> C, L -> R
+        lratio_obs = obs_ll_m3 - max(obs_ll_m1, obs_ll_m2)
+    
+
     for i in range(n_permutations):
         # Permute the phenotype values (breaking causal relationships)
-        C_perm = pd.DataFrame(np.random.permutation(C.values), index=C.index, columns=C.columns)
+        if test_model == 'M1':
+            C = pd.DataFrame(np.random.permutation(C.values), index=C.index, columns=C.columns)
+        elif test_model == 'M2':
+            R = pd.DataFrame(np.random.permutation(R.values), index=R.index, columns=R.columns)
+        else:
+            C = pd.DataFrame(np.random.permutation(C.values), index=C.index, columns=C.columns)
+        
 
         # Calculate likelihoods with permuted data
-        ll_m1_perm = m1_likelihood(L, C_perm, R)
-        ll_m2_perm = m2_likelihood(L, C_perm, R)
-        ll_m3_perm = m3_likelihood(L, C_perm, R)
+        ll_m1_perm = m1_likelihood(L, C, R)
+        ll_m2_perm = m2_likelihood(L, C, R)
+        ll_m3_perm = m3_likelihood(L, C, R)
         
-        perm_ll_m1.append(ll_m1_perm)
-        perm_ll_m2.append(ll_m2_perm)
-        perm_ll_m3.append(ll_m3_perm)
-    
+        if test_model == 'M1':
+            lratios_perm.append(ll_m1_perm - max(ll_m2_perm, ll_m3_perm))
+        elif test_model == 'M2':
+            lratios_perm.append(ll_m2_perm - max(ll_m1_perm, ll_m3_perm))
+        else:
+            lratios_perm.append(ll_m3_perm - max(ll_m1_perm, ll_m2_perm))
+
     # Calculate p-values
-    p_m1 = np.mean(np.array(perm_ll_m1) >= orig_ll_m1)
-    p_m2 = np.mean(np.array(perm_ll_m2) >= orig_ll_m2)
-    p_m3 = np.mean(np.array(perm_ll_m3) >= orig_ll_m3)
-    
+    p = (np.sum(np.array(lratios_perm) >= lratio_obs)) / (n_permutations)
+
+
     return {
-        'Original_M1': orig_ll_m1,
-        'Original_M2': orig_ll_m2,
-        'Original_M3': orig_ll_m3,
-        'P_value_M1': p_m1,
-        'P_value_M2': p_m2,
-        'P_value_M3': p_m3
-    }
+        'Original_M1': obs_ll_m1,
+        'Original_M2': obs_ll_m2,
+        'Original_M3': obs_ll_m3,
+        'P_value': p,
+        }
 
 # Load QTL and eQTL data
 qtl_df = pd.read_csv('Data/top_10_snps_QTLs.csv')
@@ -372,9 +354,9 @@ for pair in nearby_pairs:
     if result:
         causality_results.append(result)
         print(f"\nTriplet: {qtl_snp} - {gene} - {phenotype}")
-        print(f"M1 (L→R→C): {result['M1_LogLikelihood']:.2f}")
-        print(f"M2 (L→C→R): {result['M2_LogLikelihood']:.2f}")
-        print(f"M3 (L→C,R): {result['M3_LogLikelihood']:.2f}")
+        print(f"M1 (L->R->C): {result['M1_LogLikelihood']:.2f}")
+        print(f"M2 (L->C->R): {result['M2_LogLikelihood']:.2f}")
+        print(f"M3 (L->C,R): {result['M3_LogLikelihood']:.2f}")
         print(f"Best Model: {result['Best_Model']}")
 
 # Select 10 triplets for detailed permutation testing
@@ -382,40 +364,49 @@ print("\n=== PERMUTATION TESTING ON SELECTED TRIPLETS ===")
 print("Selection criteria: Top 10 triplets with highest likelihood differences between models")
 
 # Sort by likelihood difference to select most interesting cases
-if causality_results:
-    for result in causality_results:
-        likelihoods = [result['M1_LogLikelihood'], result['M2_LogLikelihood'], result['M3_LogLikelihood']]
-        result['Likelihood_Range'] = max(likelihoods) - min(likelihoods)
+for result in causality_results:
+    likelihoods = [result['M1_LogLikelihood'], result['M2_LogLikelihood'], result['M3_LogLikelihood']]
+    result['Likelihood_Range'] = max(likelihoods) - min(likelihoods)
+
+# Sort by likelihood range (most discriminative cases)
+causality_results_sorted = sorted(causality_results, key=lambda x: x['Likelihood_Range'], reverse=True)
+
+# Select top 10 for permutation testing
+selected_triplets = causality_results_sorted[:min(10, len(causality_results_sorted))]
+
+print(f"Running permutation tests on {len(selected_triplets)} triplets...")
+
+permutation_results = []
+for i, result in enumerate(selected_triplets):
+    qtl_snp = result['QTL_SNP']
+    gene = result['Gene']
+    phenotype = result['Phenotype']
     
-    # Sort by likelihood range (most discriminative cases)
-    causality_results_sorted = sorted(causality_results, key=lambda x: x['Likelihood_Range'], reverse=True)
+    print(f"\nPermutation test {i+1}/10: {qtl_snp} - {gene} - {phenotype}")
     
-    # Select top 10 for permutation testing
-    selected_triplets = causality_results_sorted[:min(10, len(causality_results_sorted))]
-    
-    print(f"Running permutation tests on {len(selected_triplets)} triplets...")
-    
-    permutation_results = []
-    for i, result in enumerate(selected_triplets):
-        qtl_snp = result['QTL_SNP']
-        gene = result['Gene']
-        phenotype = result['Phenotype']
-        
-        print(f"\nPermutation test {i+1}/10: {qtl_snp} - {gene} - {phenotype}")
-        
-        L, R, C = get_data_for_triplet(qtl_snp, gene, phenotype)
-        if L is not None and R is not None and C is not None:
-            perm_result = permutation_test(L, R, C, n_permutations=1000)
-            perm_result.update({
-                'QTL_SNP': qtl_snp,
-                'Gene': gene,
-                'Phenotype': phenotype,
-                'Best_Model': result['Best_Model']
-            })
-            permutation_results.append(perm_result)
-            
-            print(f"Best Model: {result['Best_Model']}")
-            print(f"P-values - M1: {perm_result['P_value_M1']:.4f}, M2: {perm_result['P_value_M2']:.4f}, M3: {perm_result['P_value_M3']:.4f}")
+    L, R, C = get_data_for_triplet(qtl_snp, gene, phenotype)
+    if all(x is not None for x in (L, R, C)):
+        # Perform permutation test for the best model
+        perm_result = permutation_test(L, R, C, result['Best_Model'], n_permutations=1000)
+        perm_result.update({
+            'QTL_SNP': qtl_snp,
+            'Gene': gene,
+            'Phenotype': phenotype,
+            'Best_Model': result['Best_Model']
+        })
+        permutation_results.append(perm_result)
+
+perm_results_df = pd.DataFrame(permutation_results)
+
+# FDR correction
+fdr_results = multipletests(perm_results_df['P_value'], method='fdr_bh')
+perm_results_df['FDR_P_value'] = fdr_results[1]
+
+for _, perm_result in perm_results_df.iterrows():
+    print(f"Best Model: {perm_result['Best_Model']}")
+    print(f"P-value: {perm_result['P_value']:.6f}")
+    print(f"FDR corrected P-value: {perm_result['FDR_P_value']:.6f}")
+
 
 # Summary of results
 print("\n=== SUMMARY OF PREDICTED RELATIONS ===")
@@ -434,17 +425,9 @@ if permutation_results:
     significance_threshold = 0.05
     
     for perm_result in permutation_results:
-        significant_models = []
-        if perm_result['P_value_M1'] < significance_threshold:
-            significant_models.append('M1')
-        if perm_result['P_value_M2'] < significance_threshold:
-            significant_models.append('M2')
-        if perm_result['P_value_M3'] < significance_threshold:
-            significant_models.append('M3')
-        
-        if significant_models:
+        if perm_result['P_value'] < significance_threshold:
             print(f"\n{perm_result['QTL_SNP']} - {perm_result['Gene']} - {perm_result['Phenotype']}")
-            print(f"Significant models (p < {significance_threshold}): {', '.join(significant_models)}")
+            print(f"Is Significant (p < {significance_threshold}):  Yes")
             print(f"Best model: {perm_result['Best_Model']}")
 
 print("\n=== DESIGN OF PERMUTATION TEST ===")
