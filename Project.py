@@ -371,8 +371,16 @@ for result in causality_results:
 # Sort by likelihood range (most discriminative cases)
 causality_results_sorted = sorted(causality_results, key=lambda x: x['Likelihood_Range'], reverse=True)
 
-# Select top 10 for permutation testing
-selected_triplets = causality_results_sorted[:min(10, len(causality_results_sorted))]
+# make sure triplets in causality_results_sorted are unique
+seen = set()
+unique_results = []
+for res in causality_results_sorted:
+    key = f"{res['QTL_SNP']}_{res['Gene']}_{res['Phenotype']}"
+    if key not in seen:
+        seen.add(key)
+        unique_results.append(res)
+
+selected_triplets = unique_results[:min(10, len(unique_results))]
 
 print(f"Running permutation tests on {len(selected_triplets)} triplets...")
 
@@ -434,7 +442,7 @@ print("\n=== DESIGN OF PERMUTATION TEST ===")
 print("""
 Permutation Test Design:
 1. For each triplet (L, R, C), we calculate the original likelihoods for all three models
-2. We then permute the phenotype values (C) 1000 times, breaking any causal relationships
+2. We then permute either the phenotype values (C) or the expression values (R) 1000 times, breaking any causal relationships
 3. For each permutation, we recalculate the likelihoods for all models
 4. The p-value is the fraction of permutations where the permuted likelihood >= original likelihood
 5. This tests the null hypothesis that there is no causal relationship
