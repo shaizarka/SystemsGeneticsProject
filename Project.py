@@ -165,6 +165,7 @@ def get_data_for_triplet(snp, gene, phenotype):
 
     # Find common columns
     common_cols = list(l_cols & r_cols & c_cols)
+    print(f"Common columns for SNP {snp}, Gene {gene}, Phenotype {phenotype}: {common_cols}")
 
     # Sort them if you want consistent order
     common_cols.sort()
@@ -241,12 +242,11 @@ def permutation_test(L, R, C, test_model, n_permutations=1000):
     for i in range(n_permutations):
         # Permute the phenotype values (breaking causal relationships)
         if test_model == 'M1':
-            C = pd.DataFrame(np.random.permutation(C.values), index=C.index, columns=C.columns)
+            C = pd.DataFrame(np.random.permutation(C.values.T).T, index=C.index, columns=C.columns)
         elif test_model == 'M2':
-            R = pd.DataFrame(np.random.permutation(R.values), index=R.index, columns=R.columns)
+            R = pd.DataFrame(np.random.permutation(R.values.T).T, index=R.index, columns=R.columns)
         else:
-            C = pd.DataFrame(np.random.permutation(C.values), index=C.index, columns=C.columns)
-        
+            C = pd.DataFrame(np.random.permutation(C.values.T).T, index=C.index, columns=C.columns)
 
         # Calculate likelihoods with permuted data
         ll_m1_perm = m1_likelihood(L, C, R)
@@ -404,8 +404,8 @@ perm_results_df['FDR_P_value'] = fdr_results[1]
 
 for _, perm_result in perm_results_df.iterrows():
     print(f"Best Model: {perm_result['Best_Model']}")
-    print(f"P-value: {perm_result['P_value']:.6f}")
-    print(f"FDR corrected P-value: {perm_result['FDR_P_value']:.6f}")
+    print(f"P-value: {perm_result['P_value']:.4f}")
+    print(f"FDR corrected P-value: {perm_result['FDR_P_value']:.4f}")
 
 
 # Summary of results
