@@ -285,13 +285,13 @@ geno_meta = genotype_df.iloc[:, :3]    # adjust if metadata columns differ
 geno_data = genotype_df.iloc[:, 3:]
 
 # Find columns that contain any 'U' or 'H'
-bad_strands = geno_data.columns[geno_data.isin(['U', 'H']).any(axis=0)]
+bad_strands = geno_data.columns[geno_data.isin(['U']).any(axis=0)]
 
 # Drop those columns
 geno_data_clean = geno_data.drop(columns=bad_strands)
 
 # Replace B/D with 0/1
-geno_data_clean = geno_data_clean.replace({'B': 0, 'D': 1})
+geno_data_clean = geno_data_clean.replace({'B': 0, 'H': 1, 'D': 2})
 
 # Reassemble the full genotype dataframe (if you want to preserve metadata)
 genotype_df = pd.concat([geno_meta, geno_data_clean], axis=1)
