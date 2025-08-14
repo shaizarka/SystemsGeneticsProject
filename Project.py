@@ -146,25 +146,9 @@ def get_data_for_triplet(snp, gene, phenotype):
     Extract the actual data vectors for a given SNP, gene, and phenotype
     """
     # Get genotype data for the SNP (rows of genotype_df are SNPs)
-    if snp in genotype_df["Locus"].values:
-        L = genotype_df.loc[genotype_df["Locus"] == snp].iloc[:, 3:]
-    else:
-        print(f"Warning: QTL SNP {snp} not found in genotype data")
-        return None, None, None
-    
-    # Get expression data for the gene
-    if gene in expression_df.columns:
-        R = expression_df[[gene]].T
-    else:
-        print(f"Warning: Gene {gene} not found in expression data")
-        return None, None, None
-    
-    # Get phenotype data
-    if phenotype in phenotype_df['ID_FOR_CHECK'].values:
-        C = phenotype_df.loc[phenotype_df['ID_FOR_CHECK'] == phenotype].iloc[:, 7:]
-    else:
-        print(f"Warning: Phenotype {phenotype} not found in phenotype data")
-        return None, None, None
+    L = genotype_df.loc[genotype_df["Locus"] == snp].iloc[:, 3:]
+    R = expression_df[[gene]].T
+    C = phenotype_df.loc[phenotype_df['ID_FOR_CHECK'] == phenotype].iloc[:, 7:]
     
     # remove any rows with NaN values
     L = L.dropna(axis=1, how='any')
@@ -184,7 +168,7 @@ def get_data_for_triplet(snp, gene, phenotype):
     # Find common columns
     common_cols = list(l_cols & r_cols & c_cols)
 
-    # Sort them if you want consistent order
+    # Sort columns for consistent order
     common_cols.sort()
 
     # Subset each to common columns
@@ -200,9 +184,6 @@ def test_causality(qtl_snp, gene, phenotype):
     Test causality for a given QTL SNP, gene, and phenotype triplet
     """
     L, R, C = get_data_for_triplet(qtl_snp, gene, phenotype)
-    
-    if L is None or R is None or C is None:
-        return None
     
     # Calculate likelihoods for each model
     ll_m1 = m1_log_likelihood(L, C, R)
@@ -234,9 +215,6 @@ def permutation_test(L, R, C, test_model, n_permutations=10_000):
     H1: test_model is closer to true model than the others
     """
 
-    if not test_model in ['M1', 'M2', 'M3']:
-        raise ValueError("test_model must be one of 'M1', 'M2', 'M3'")
-
     # Calculate observed likelihoods
     obs_ll_m1 = m1_log_likelihood(L, C, R)
     obs_ll_m2 = m2_log_likelihood(L, C, R)
@@ -255,7 +233,6 @@ def permutation_test(L, R, C, test_model, n_permutations=10_000):
         # M3: L -> C, L -> R
         lratio_obs = obs_ll_m3 - max(obs_ll_m1, obs_ll_m2)
     
-
     for i in range(n_permutations):
         # Permute the phenotype values (breaking causal relationships)
         if test_model == 'M1':
@@ -463,8 +440,12 @@ if permutation_results:
 print("\n=== DESIGN OF PERMUTATION TEST ===")
 print("""
 Permutation Test Design:
+
+H0: The chosen model is NOT closer to the true model than the others.
+H1: The chosen model is closer to the true model than the others.
+
 1. For each triplet (L, R, C), we calculate the original likelihoods for all three models
-2. We then permute either the phenotype values (C) or the expression values (R) 1000 times, breaking any causal relationships
+2. We then permute either the phenotype values (C) or the expression values (R) 10000 times, breaking any causal relationships
 3. For each permutation, we recalculate the likelihoods for all models
 4. The p-value is the fraction of permutations where the permuted likelihood >= original likelihood
 5. This tests the null hypothesis that there is no causal relationship
